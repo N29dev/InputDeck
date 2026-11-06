@@ -16,7 +16,7 @@
 
 ## Download prebuilt app (no development tools needed)
 
-Visit **[GitHub Releases](https://github.com/N29dev/InputDeck/releases/latest)** and expand **Assets** to download:
+Visit **[GitHub Releases](https://github.com/N29dev/InputDeck/releases)** and expand **Assets** to download:
 
 - `InputDeck-macOS-AppleSilicon.zip` — M1/M2/M3/M4/M5 Macs.
 - `InputDeck-macOS-Intel.zip` — Intel Macs.
