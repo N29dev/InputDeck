@@ -2,7 +2,7 @@
 
 **InputDeck** is a lightweight, open-source keystroke and live trackpad-contact overlay for macOS. Use it directly on your desktop or as a transparent OBS Browser Source. Built with Swift/AppKit and a small C bridge; no online accounts, dependencies, or cloud servers.
 
-> **Status: v0.2.2 beta.** Apple Silicon CI builds have passed; Intel binaries and live trackpad behavior still need testing on additional Macs. Feedback and bug reports are welcome.
+> **Status: v0.2.2 beta / Continuous Preview.** GitHub Actions builds both Apple Silicon and Intel macOS apps. Finger tracking and input permission behavior still need real-world testing on additional Mac models. Feedback and bug reports are welcome.
 
 ## Features
 
