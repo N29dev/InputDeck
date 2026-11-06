@@ -72,7 +72,7 @@ Click the **keyboard icon** in the macOS menu bar → **Preferences…**.
 - **Show trackpad:** uncheck to use only the keyboard overlay.
 - **Opacity:** adjust the background opacity from 40% to 100%.
 
-**Menu bar → Toggle click-through (to drag):** turn off click-through, drag the overlay wherever you want, then turn it on again so it won't intercept gameplay clicks. You can also snap to any of the four corners. Position and settings are saved automatically.
+**Position and Preferences:** New installs center the overlay by default; its menu includes **Position: center** and four corner positions. Existing custom positions are preserved. Opening **Preferences** temporarily hides the overlay so settings are never covered; closing or saving restores the overlay if it was enabled. Use **Toggle click-through (to drag)** to drag the overlay anywhere without affecting gameplay. Position and settings are saved automatically.
 
 Settings are stored in macOS `UserDefaults` for bundle ID `kz.n29.inputdeck`. No key history is persisted.
 
