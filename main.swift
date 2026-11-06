@@ -106,7 +106,9 @@ final class KeyCapture {
     private(set) var pressed = Set<String>()
     var onChange: ((Set<String>) -> Void)?
     var onHotkey: (() -> Void)?
-    var onClick: (() -> Void)?
+    var onMouseChange: ((Bool, Bool, String?) -> Void)?
+    private(set) var leftMouseDown = false
+    private(set) var rightMouseDown = false
     private var selected = Set(KeyCatalog.defaultKeys)
     private var hotkeyCode: Int64 = 40
     private var hotkeyFlags: CGEventFlags = [.maskAlternate, .maskShift]
@@ -152,7 +154,9 @@ final class KeyCapture {
                  | (CGEventMask(1) << CGEventType.keyUp.rawValue)
                  | (CGEventMask(1) << CGEventType.flagsChanged.rawValue)
                  | (CGEventMask(1) << CGEventType.leftMouseDown.rawValue)
+                 | (CGEventMask(1) << CGEventType.leftMouseUp.rawValue)
                  | (CGEventMask(1) << CGEventType.rightMouseDown.rawValue)
+                 | (CGEventMask(1) << CGEventType.rightMouseUp.rawValue)
         guard let created = CGEvent.tapCreate(tap: .cgSessionEventTap,
                                              place: .headInsertEventTap,
                                              options: .listenOnly,
@@ -167,12 +171,26 @@ final class KeyCapture {
         return isListening
     }
 
-    // Poll only the selected keys to recover missed events and clear stuck highlights.
+    private func updateMouseState(left: Bool, right: Bool) {
+        guard left != leftMouseDown || right != rightMouseDown else { return }
+        let pressedSide: String? = left && !leftMouseDown ? "left"
+            : right && !rightMouseDown ? "right" : nil
+        leftMouseDown = left
+        rightMouseDown = right
+        onMouseChange?(left, right, pressedSide)
+    }
+
+    // Poll the selected keys and both mouse buttons, recovering missed down/up events.
     func synchronizeKeyState() {
         guard permissionCache else {
             if !pressed.isEmpty { pressed.removeAll(); onChange?(pressed) }
+            updateMouseState(left: false, right: false)
             return
         }
+        updateMouseState(
+            left: CGEventSource.buttonState(.combinedSessionState, button: .left),
+            right: CGEventSource.buttonState(.combinedSessionState, button: .right)
+        )
         var next = Set<String>()
         let flags = CGEventSource.flagsState(.combinedSessionState)
         for (name, codes) in pollCodes {
@@ -196,9 +214,20 @@ final class KeyCapture {
             if let tap = tap { CGEvent.tapEnable(tap: tap, enable: true) }
             return
         }
-        if kind == .leftMouseDown || kind == .rightMouseDown {
-            onClick?()
+        switch kind {
+        case .leftMouseDown:
+            updateMouseState(left: true, right: rightMouseDown)
             return
+        case .leftMouseUp:
+            updateMouseState(left: false, right: rightMouseDown)
+            return
+        case .rightMouseDown:
+            updateMouseState(left: leftMouseDown, right: true)
+            return
+        case .rightMouseUp:
+            updateMouseState(left: leftMouseDown, right: false)
+            return
+        default: break
         }
         let code = event.getIntegerValueField(.keyboardEventKeycode)
         if kind == .keyDown && code == hotkeyCode &&
@@ -239,6 +268,12 @@ final class OverlayView: NSView {
     private var ripples: [Ripple] = []
     private var lastContacts: [Int32: CGPoint] = [:]
     private var lastTrailPoints: [Int32: CGPoint] = [:]
+    private var lastTouchPosition: CGPoint?
+    private var lastTouchAt: TimeInterval = 0
+    private(set) var leftClickPressed = false
+    private(set) var rightClickPressed = false
+    private var leftFlashUntil: TimeInterval = 0
+    private var rightFlashUntil: TimeInterval = 0
     var selected = KeyCatalog.defaultKeys { didSet { needsDisplay = true } }
     var pressed = Set<String>() { didSet { needsDisplay = true } }
     var fingers = [IDFinger]() { didSet { needsDisplay = true } }
@@ -264,6 +299,8 @@ final class OverlayView: NSView {
             let id = Int32(finger.identifier)
             let point = CGPoint(x: CGFloat(finger.x), y: CGFloat(finger.y))
             current[id] = point
+            lastTouchPosition = point
+            lastTouchAt = now
             if lastContacts[id] == nil {
                 addRipple(at: point, now: now)
                 lastTrailPoints[id] = point
@@ -291,17 +328,32 @@ final class OverlayView: NSView {
         fingers = next
     }
 
-    func pulseForClick(now: TimeInterval) {
-        guard trackpadAvailable else { return }
-        for finger in fingers {
-            addRipple(at: CGPoint(x: CGFloat(finger.x), y: CGFloat(finger.y)), now: now, click: true)
+    func updateClicks(left: Bool, right: Bool, pressedSide: String?, now: TimeInterval) {
+        leftClickPressed = left
+        rightClickPressed = right
+        if let pressedSide = pressedSide {
+            if pressedSide == "left" { leftFlashUntil = now + 0.32 }
+            if pressedSide == "right" { rightFlashUntil = now + 0.32 }
+            // A click may arrive slightly after the touch sample. Use the most recent
+            // contact only briefly, never claim to know an external mouse's position.
+            if trackpadAvailable {
+                if !fingers.isEmpty {
+                    for finger in fingers {
+                        addRipple(at: CGPoint(x: CGFloat(finger.x), y: CGFloat(finger.y)),
+                                  now: now, click: true)
+                    }
+                } else if let previous = lastTouchPosition, now - lastTouchAt < 0.25 {
+                    addRipple(at: previous, now: now, click: true)
+                }
+            }
         }
+        needsDisplay = true
     }
 
     func animateRipples(now: TimeInterval) {
-        guard !ripples.isEmpty else { return }
+        let hadRipples = !ripples.isEmpty
         ripples.removeAll { now - $0.began >= $0.lifetime }
-        needsDisplay = true
+        if hadRipples || leftFlashUntil > now || rightFlashUntil > now { needsDisplay = true }
     }
 
     // The spacebar is displayed as a full-width row beneath the regular keys.
@@ -404,6 +456,22 @@ final class OverlayView: NSView {
                                             width: 11, height: 11)).fill()
             }
             NSGraphicsContext.restoreGraphicsState()
+            let leftActive = leftClickPressed || now < leftFlashUntil
+            let rightActive = rightClickPressed || now < rightFlashUntil
+            let chipY = pad.maxY - 29
+            for (title, x, isActive) in [
+                ("L CLICK", pad.minX + 9, leftActive),
+                ("R CLICK", pad.maxX - 77, rightActive)
+            ] {
+                let frame = NSRect(x: x, y: chipY, width: 68, height: 20)
+                rectangle(frame,
+                          fill: isActive ? NSColor(srgbRed: 0.24, green: 0.48, blue: 0.93, alpha: 0.95)
+                                         : NSColor.black.withAlphaComponent(0.29),
+                          radius: 6,
+                          outline: NSColor.white.withAlphaComponent(isActive ? 0.65 : 0.14))
+                label(title, frame: frame, size: 9,
+                      color: isActive ? .white : NSColor.white.withAlphaComponent(0.58))
+            }
         }
     }
 }
@@ -425,6 +493,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var opacitySlider: NSSlider!
     private var obsAvailable = false
     private var clickSerial = 0
+    private var clickSide = "left"
     private var lastSent = ""
     private let obsURL = "http://127.0.0.1:8787/"
 
@@ -463,10 +532,14 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.publish()
         }
         capture.onHotkey = { [weak self] in self?.toggleVisibility() }
-        capture.onClick = { [weak self] in
+        capture.onMouseChange = { [weak self] left, right, pressedSide in
             guard let self = self else { return }
-            self.view.pulseForClick(now: ProcessInfo.processInfo.systemUptime)
-            self.clickSerial &+= 1
+            self.view.updateClicks(left: left, right: right, pressedSide: pressedSide,
+                                   now: ProcessInfo.processInfo.systemUptime)
+            if let side = pressedSide {
+                self.clickSerial &+= 1
+                self.clickSide = side
+            }
             self.publish()
         }
         capture.configure(preferences)
@@ -516,6 +589,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let state: [String: Any] = [
             "keys": capture.pressed.sorted(), "selected": preferences.tracked,
             "fingers": fingers, "clickSerial": clickSerial,
+            "clickSide": clickSide,
+            "leftClick": capture.leftMouseDown, "rightClick": capture.rightMouseDown,
             "trackpad": view.trackpadAvailable,
             "trackpadVisible": preferences.trackpadVisible,
             "opacity": Double(preferences.opacity)
