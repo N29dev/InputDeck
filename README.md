@@ -17,7 +17,7 @@
 
 ## Download prebuilt app (no development tools needed)
 
-Visit **[GitHub Releases](https://github.com/N29dev/InputDeck/releases)** and expand **Assets** to download:
+For the **newest development build** (automatically refreshed after each successful push to `main`), use **[InputDeck Continuous Preview](https://github.com/N29dev/InputDeck/releases/tag/continuous)**. For numbered, versioned betas use **[GitHub Releases](https://github.com/N29dev/InputDeck/releases)**. Expand **Assets** to download:
 
 - `InputDeck-macOS-AppleSilicon.zip` — M1/M2/M3/M4/M5 Macs.
 - `InputDeck-macOS-Intel.zip` — Intel Macs.
@@ -26,19 +26,21 @@ Unzip the file, drag `InputDeck.app` into **Applications**, and open it. Grant *
 
 **Important:** This beta is **ad-hoc signed, not Apple Developer ID signed or notarized**. Depending on your security settings, macOS may refuse the first launch. If you trust the code from this repository, open the app from Finder using Control-click → **Open**, or use the **Open Anyway** option under **System Settings → Privacy & Security** after a blocked launch. Do not disable Gatekeeper globally.
 
-Releases are generated automatically when the maintainer pushes a version tag such as `v0.2.1-beta.1`; after both Apple Silicon and Intel builds pass, the downloadable ZIPs are attached to the release. Until the first tag is published, the Releases page will be empty. For temporary test downloads, open the latest successful run of **macOS Release** under **Actions** and download its artifacts (GitHub sign-in may be required).
+**Continuous Preview:** The [macOS Build workflow](.github/workflows/build.yml) compiles both architectures on pushes to `main`, verifies their ad-hoc signatures, and only then refreshes the two ZIPs attached to the reusable `continuous` GitHub prerelease. Its tag intentionally moves to the tested commit. This makes the download URL permanent without creating a new beta for every minor change. Never treat `continuous` as an immutable version or cite it as a fixed source revision.
 
-### Maintainer: publish a beta
+**Versioned betas:** Pushing an explicit `v*` tag still creates a separate, immutable-by-convention numbered prerelease through [the release workflow](.github/workflows/release.yml). These releases do not update when `main` changes.
+
+### Maintainer: publish a numbered beta
 
 After committing changes to `main`, tag the version you want to release:
 
 ```bash
 git pull --ff-only
-git tag v0.2.1-beta.1
-git push origin v0.2.1-beta.1
+git tag v0.2.3-beta.1
+git push origin v0.2.3-beta.1
 ```
 
-The tag triggers [the release workflow](.github/workflows/release.yml). Confirm both build jobs pass in GitHub Actions before sharing the Releases link. Do not create a GitHub release manually for the same tag while the workflow is publishing it.
+The tag triggers [the release workflow](.github/workflows/release.yml). Confirm both build jobs pass in GitHub Actions before sharing the Releases link. Do not create a GitHub release manually for the same tag while the workflow is publishing it. Ordinary changes merged into `main` need **no manual tagging** to update Continuous Preview.
 
 ## Install from source
 
