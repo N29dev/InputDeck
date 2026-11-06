@@ -112,6 +112,7 @@ final class KeyCapture {
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
     private var pollCodes: [String: [CGKeyCode]] = [:]
+    private var permissionCache = false
     private let modifierMask: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift]
 
     fileprivate func configure(_ settings: Preferences) {
@@ -130,8 +131,11 @@ final class KeyCapture {
     var hasPermission: Bool { CGPreflightListenEventAccess() }
     var isListening: Bool { tap.map { CFMachPortIsValid($0) && CGEvent.tapIsEnabled(tap: $0) } ?? false }
 
+    func refreshPermission() { permissionCache = hasPermission }
+
     @discardableResult func start(requestPermission: Bool = true) -> Bool {
-        guard hasPermission else {
+        refreshPermission()
+        guard permissionCache else {
             if requestPermission { _ = CGRequestListenEventAccess() }
             return false
         }
@@ -162,7 +166,7 @@ final class KeyCapture {
 
     // Poll only the selected keys to recover missed events and clear stuck highlights.
     func synchronizeKeyState() {
-        guard hasPermission else {
+        guard permissionCache else {
             if !pressed.isEmpty { pressed.removeAll(); onChange?(pressed) }
             return
         }
@@ -382,6 +386,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         // Retry quietly when the user grants Input Monitoring after launch.
         if Date().timeIntervalSince(lastRetryAt) >= 2 {
             lastRetryAt = Date()
+            capture.refreshPermission()
             if !capture.isListening && capture.hasPermission { _ = capture.start(requestPermission: false) }
             updateKeyboardStatus()
         }
