@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>InputDeck · OBS Overlay</title>
+<style>
+:root { font-family: -apple-system,BlinkMacSystemFont,"SF Pro Display",Inter,sans-serif; color-scheme:dark }
+* { box-sizing:border-box }
+html, body { margin:0; background:transparent!important; overflow:hidden }
+.panel { display:flex; position:absolute; top:2px; left:2px; gap:20px; padding:16px 15px 18px; width:499px; height:220px; border-radius:17px;
+  background:rgba(12,15,25,var(--panel-opacity,.88)); border:1px solid rgba(255,255,255,.15); }
+.block { display:flex; flex-direction:column; gap:7px }
+.title { height:13px; text-align:center; font-size:10px; font-weight:700; letter-spacing:.1em; color:rgba(255,255,255,.7) }
+.keyboard { width:235px; display:grid; grid-template-columns:repeat(4,55px); grid-auto-rows:38px; gap:5px; align-content:start }
+.key { display:flex; align-items:center; justify-content:center; border-radius:8px; background:rgba(255,255,255,.08);
+  border:1px solid rgba(255,255,255,.09); font-size:13px; font-weight:650; color:#fff; transition:background .065s,border-color .065s }
+.key.small { font-size:9px; letter-spacing:.02em }
+.key.active { background:rgba(61,122,237,.90); border-color:rgba(125,181,255,.95); box-shadow:0 0 12px rgba(40,116,247,.22) }
+.trackpad { position:relative; width:213px; flex:1; min-height:150px; border-radius:10px; overflow:hidden;
+  background:rgba(26,35,54,.86); border:1px solid rgba(255,255,255,.21) }
+.finger { position:absolute; transform:translate(-50%,-50%); width:11px; height:11px; border-radius:50%;
+  background:#8dc9ff; box-shadow:0 0 0 11px rgba(75,157,255,.18),0 0 16px rgba(91,179,255,.35) }
+.msg { position:absolute; inset:0; display:flex; justify-content:center; align-items:center; text-align:center;
+  font-size:11px; color:rgba(255,255,255,.55) }
+</style>
+</head>
+<body>
+<div class="panel" id="panel">
+  <section class="block"><div class="title">INPUTDECK</div><div class="keyboard" id="keyboard"></div></section>
+  <section class="block" id="trackpadBlock"><div class="title">TRACKPAD</div><div class="trackpad" id="trackpad"></div></section>
+</div>
+<script>
+(() => {
+  'use strict';
+  const defaults = ['Q','W','E','R','A','S','D','F','Shift','Ctrl','C','V','Space'];
+  const panel = document.getElementById('panel');
+  const keyboard = document.getElementById('keyboard');
+  const pad = document.getElementById('trackpad');
+  const padBlock = document.getElementById('trackpadBlock');
+  let lastSelected = '';
+  let connected = false;
+
+  function render(state) {
+    const selected = Array.isArray(state.selected) ? state.selected : defaults;
+    const visible = state.trackpadVisible !== false;
+    const signature = JSON.stringify(selected);
+    if (signature !== lastSelected) {
+      keyboard.replaceChildren();
+      for (const key of selected) {
+        const node = document.createElement('div');
+        node.className = 'key' + (key.length > 3 ? ' small' : '');
+        node.dataset.key = key;
+        node.textContent = key.toUpperCase();
+        keyboard.appendChild(node);
+      }
+      lastSelected = signature;
+    }
+    const height = Math.max(224, 52 + Math.ceil(Math.max(1,selected.length)/4)*43);
+    panel.style.height = (height-4)+'px';
+    panel.style.width = visible ? '499px' : '262px';
+    panel.style.setProperty('--panel-opacity', String(Math.min(1,Math.max(.4,Number(state.opacity)||.88))));
+    padBlock.style.display = visible ? 'flex' : 'none';
+    const active = new Set(state.keys || []);
+    for (const element of keyboard.children) element.classList.toggle('active',active.has(element.dataset.key));
+    pad.replaceChildren();
+    if (!state.trackpad) {
+      const msg = document.createElement('div');
+      msg.className = 'msg';
+      msg.textContent = 'Trackpad unavailable';
+      pad.appendChild(msg);
+    } else {
+      for (const finger of state.fingers || []) {
+        const node = document.createElement('div');
+        node.className = 'finger';
+        node.style.left = Math.max(0,Math.min(100,Number(finger.x)*100))+'%';
+        node.style.top = Math.max(0,Math.min(100,(1-Number(finger.y))*100))+'%';
+        pad.appendChild(node);
+      }
+    }
+  }
+  render({selected:defaults, keys:[], fingers:[], trackpad:true, trackpadVisible:true, opacity:.88});
+  const stream = new EventSource('/events');
+  stream.onmessage = event => {
+    try { connected = true; render(JSON.parse(event.data)); } catch (_) { /* malformed frame */ }
+  };
+  stream.onerror = () => { connected = false; /* EventSource reconnects */ };
+  // Demo preview: http://127.0.0.1:8787/?demo=1
+  if (new URLSearchParams(location.search).has('demo')) {
+    setInterval(() => {
+      if (!connected) render({selected:defaults, keys:['W','Shift','Space'], trackpad:true,
+         trackpadVisible:true, fingers:[{x:.25+.2*Math.sin(Date.now()/1300),y:.5},{x:.65,y:.65}]});
+    },80);
+  }
+})();
+</script>
+</body>
+</html>
