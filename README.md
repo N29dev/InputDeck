@@ -10,6 +10,7 @@
 - **Global show/hide shortcut**: defaults to **Option + Shift + K**; customize modifier pair and key in Preferences.
 - **Trackpad finger positions**: live dots representing finger contacts, where Apple's private MultitouchSupport API is available.
 - **Trackpad ripples**: expanding waves at first touch and on mouse/trackpad click, plus subtle fading pulses along the path each finger followed; rendered in the native overlay and OBS.
+- **Click indicators**: separate **L CLICK** and **R CLICK** indicators light up for primary/secondary clicks, including taps-to-click that macOS converts to mouse-down events. The extra click pulse uses a current or very recent finger position if one is available; otherwise the indicator still responds without inventing a touch location.
 - **Customizable opacity**, trackpad display, and click-through mode.
 - **Saved settings and position** between launches.
 - **OBS integration** via a local, transparent Browser Source on `127.0.0.1:8787`.
