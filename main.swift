@@ -316,7 +316,7 @@ final class OverlayView: NSView {
     }
 }
 
-final class AppController: NSObject, NSApplicationDelegate {
+final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let capture = KeyCapture()
     private var preferences = Preferences.load()
     private var panel: NSPanel!
@@ -448,6 +448,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         add(menu, "Preferences…", #selector(openPreferences))
         add(menu, "Toggle click-through (to drag)", #selector(toggleClickThrough))
         menu.addItem(.separator())
+        add(menu, "Position: center", #selector(centerOverlay))
         add(menu, "Position: top left", #selector(topLeft))
         add(menu, "Position: top right", #selector(topRight))
         add(menu, "Position: bottom left", #selector(bottomLeft))
@@ -472,7 +473,14 @@ final class AppController: NSObject, NSApplicationDelegate {
                 return
             }
         }
-        positionPanel(corner: "topRight")
+        centerPanel()
+    }
+    private func centerPanel() {
+        guard let screen = panel.screen ?? NSScreen.main ?? NSScreen.screens.first else { return }
+        let r = screen.visibleFrame
+        panel.setFrameOrigin(NSPoint(x: r.midX - panel.frame.width / 2,
+                                     y: r.midY - panel.frame.height / 2))
+        savePanelPosition()
     }
     private func positionPanel(corner: String) {
         guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
@@ -492,14 +500,19 @@ final class AppController: NSObject, NSApplicationDelegate {
     @objc private func toggleVisibility() {
         preferences.isVisible.toggle()
         preferences.save()
-        if preferences.isVisible { panel.orderFrontRegardless() }
-        else { panel.orderOut(nil) }
+        // Keep the settings window unobstructed, even when the global hotkey is pressed.
+        if preferences.isVisible && settingsWindow?.isVisible != true {
+            panel.orderFrontRegardless()
+        } else {
+            panel.orderOut(nil)
+        }
     }
     @objc private func toggleClickThrough() {
         preferences.clickThrough.toggle()
         preferences.save()
         panel.ignoresMouseEvents = preferences.clickThrough
     }
+    @objc private func centerOverlay() { centerPanel() }
     @objc private func topLeft() { positionPanel(corner: "topLeft") }
     @objc private func topRight() { positionPanel(corner: "topRight") }
     @objc private func bottomLeft() { positionPanel(corner: "bottomLeft") }
@@ -545,12 +558,27 @@ final class AppController: NSObject, NSApplicationDelegate {
         return field
     }
     @objc private func openPreferences() {
-        if let window = settingsWindow { window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true); return }
+        if let window = settingsWindow {
+            // Closing without saving discards unsaved edits.
+            if !window.isVisible {
+                keysField.stringValue = preferences.tracked.joined(separator: ", ")
+                modifiersPopup.selectItem(withTitle: preferences.hotkeyModifiers.rawValue)
+                shortcutPopup.selectItem(withTitle: preferences.hotkeyKey)
+                trackpadCheckbox.state = preferences.trackpadVisible ? .on : .off
+                opacitySlider.doubleValue = Double(preferences.opacity)
+            }
+            panel.orderOut(nil)
+            window.center()
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 530, height: 380),
                               styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         window.title = "InputDeck Preferences"
         window.center()
         window.isReleasedWhenClosed = false
+        window.delegate = self
         guard let content = window.contentView else { return }
         content.addSubview(label("Tracked keys (1–24, comma-separated)", frame: NSRect(x: 24, y: 326, width: 470, height: 21), font: 13))
         keysField = NSTextField(frame: NSRect(x: 24, y: 288, width: 482, height: 29))
@@ -588,8 +616,14 @@ final class AppController: NSObject, NSApplicationDelegate {
         save.frame = NSRect(x: 356, y: 22, width: 150, height: 30)
         content.addSubview(save)
         settingsWindow = window
+        panel.orderOut(nil)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === settingsWindow else { return }
+        // Restore the requested visibility after Preferences closes or is saved.
+        if preferences.isVisible { panel.orderFrontRegardless() }
     }
     @objc private func restoreDefaults() {
         keysField.stringValue = KeyCatalog.defaultKeys.joined(separator: ", ")
@@ -630,7 +664,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         panel.setFrameOrigin(oldOrigin)
         savePanelPosition()
         publish()
-        settingsWindow?.orderOut(nil)
+        settingsWindow?.close()
     }
     func applicationWillTerminate(_ notification: Notification) {
         timer?.invalidate()
