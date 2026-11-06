@@ -9,6 +9,7 @@
 - **Custom key layout**: 1–24 selected physical keys, arranged automatically in four columns.
 - **Global show/hide shortcut**: defaults to **Option + Shift + K**; customize modifier pair and key in Preferences.
 - **Trackpad finger positions**: live dots representing finger contacts, where Apple's private MultitouchSupport API is available.
+- **Trackpad ripples**: expanding waves at first touch and on mouse/trackpad click, plus subtle fading pulses along the path each finger followed; rendered in the native overlay and OBS.
 - **Customizable opacity**, trackpad display, and click-through mode.
 - **Saved settings and position** between launches.
 - **OBS integration** via a local, transparent Browser Source on `127.0.0.1:8787`.
@@ -90,6 +91,8 @@ Settings are stored in macOS `UserDefaults` for bundle ID `kz.n29.inputdeck`. No
 Note: The Browser Source's dimensions are set manually in OBS. If you change the number of selected keys, increase its height as needed to avoid clipping. Hide the desktop overlay without hiding your OBS input feed.
 
 Open `http://127.0.0.1:8787/?demo=1` in a browser for a demo animation **when the live app isn't connected**.
+
+Touch ripples are local visual effects only, not saved input histories. Each touch is associated with its contact identifier so multiple fingers leave independent trails; a physical click produces an extra bright pulse when a finger is on the trackpad. OBS uses the same coordinates via the localhost stream. The effects need an active, compatible trackpad connection and the click effect needs keyboard/mouse Input Monitoring access.
 
 ## Privacy & security
 
