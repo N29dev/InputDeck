@@ -111,22 +111,38 @@ final class KeyCapture {
     private var hotkeyFlags: CGEventFlags = [.maskAlternate, .maskShift]
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
+    private var pollCodes: [String: [CGKeyCode]] = [:]
     private let modifierMask: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift]
 
     fileprivate func configure(_ settings: Preferences) {
         selected = Set(settings.tracked)
+        // Include both left/right modifier codes and physical key variants.
+        pollCodes = [:]
+        for (code, name) in KeyCatalog.codes where selected.contains(name) {
+            pollCodes[name, default: []].append(CGKeyCode(code))
+        }
         hotkeyCode = KeyCatalog.keycode(for: settings.hotkeyKey) ?? 40
         hotkeyFlags = settings.hotkeyModifiers.flags
         pressed.formIntersection(selected)
         onChange?(pressed)
     }
 
-    @discardableResult func start() -> Bool {
+    var hasPermission: Bool { CGPreflightListenEventAccess() }
+    var isListening: Bool { tap.map { CFMachPortIsValid($0) && CGEvent.tapIsEnabled(tap: $0) } ?? false }
+
+    @discardableResult func start(requestPermission: Bool = true) -> Bool {
+        guard hasPermission else {
+            if requestPermission { _ = CGRequestListenEventAccess() }
+            return false
+        }
         if let tap = tap, CFMachPortIsValid(tap) {
             CGEvent.tapEnable(tap: tap, enable: true)
-            return true
+            return isListening
         }
-        if !CGPreflightListenEventAccess() { _ = CGRequestListenEventAccess() }
+        // Clean up invalid taps before retrying.
+        if let source = source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, CFRunLoopMode.commonModes) }
+        source = nil
+        tap = nil
         let mask = (CGEventMask(1) << CGEventType.keyDown.rawValue)
                  | (CGEventMask(1) << CGEventType.keyUp.rawValue)
                  | (CGEventMask(1) << CGEventType.flagsChanged.rawValue)
@@ -141,7 +157,31 @@ final class KeyCapture {
         CGEvent.tapEnable(tap: created, enable: true)
         tap = created
         source = createdSource
-        return true
+        return isListening
+    }
+
+    // Poll only the selected keys to recover missed events and clear stuck highlights.
+    func synchronizeKeyState() {
+        guard hasPermission else {
+            if !pressed.isEmpty { pressed.removeAll(); onChange?(pressed) }
+            return
+        }
+        var next = Set<String>()
+        let flags = CGEventSource.flagsState(.combinedSessionState)
+        for (name, codes) in pollCodes {
+            let down: Bool
+            switch name {
+            case "Shift": down = flags.contains(.maskShift)
+            case "Ctrl": down = flags.contains(.maskControl)
+            case "Cmd": down = flags.contains(.maskCommand)
+            case "Option": down = flags.contains(.maskAlternate)
+            case "Caps": down = flags.contains(.maskAlphaShift)
+            default:
+                down = codes.contains { CGEventSource.keyState(.combinedSessionState, key: $0) }
+            }
+            if down { next.insert(name) }
+        }
+        if next != pressed { pressed = next; onChange?(pressed) }
     }
 
     func consume(_ kind: CGEventType, _ event: CGEvent) {
@@ -278,6 +318,8 @@ final class AppController: NSObject, NSApplicationDelegate {
     private var panel: NSPanel!
     private var view: OverlayView!
     private var statusItem: NSStatusItem!
+    private var captureStatusItem: NSMenuItem?
+    private var lastRetryAt = Date.distantPast
     private var timer: Timer?
     private var settingsWindow: NSWindow?
     private var keysField: NSTextField!
@@ -327,6 +369,7 @@ final class AppController: NSObject, NSApplicationDelegate {
         capture.configure(preferences)
         _ = capture.start()
         setupMenu()
+        updateKeyboardStatus()
         timer = Timer.scheduledTimer(withTimeInterval: 1 / 60.0, repeats: true) {
             [weak self] _ in self?.refresh()
         }
@@ -335,6 +378,13 @@ final class AppController: NSObject, NSApplicationDelegate {
     }
 
     private func refresh() {
+        capture.synchronizeKeyState()
+        // Retry quietly when the user grants Input Monitoring after launch.
+        if Date().timeIntervalSince(lastRetryAt) >= 2 {
+            lastRetryAt = Date()
+            if !capture.isListening && capture.hasPermission { _ = capture.start(requestPermission: false) }
+            updateKeyboardStatus()
+        }
         guard view.trackpadAvailable else { return }
         var buffer = [IDFinger](repeating: IDFinger(x: 0, y: 0, size: 0), count: 16)
         let count = buffer.withUnsafeMutableBufferPointer { points in
@@ -384,6 +434,10 @@ final class AppController: NSObject, NSApplicationDelegate {
         let title = NSMenuItem(title: "InputDeck · Keyboard + Trackpad", action: nil, keyEquivalent: "")
         title.isEnabled = false
         menu.addItem(title)
+        let captureStatus = NSMenuItem(title: "Keyboard: checking…", action: nil, keyEquivalent: "")
+        captureStatus.isEnabled = false
+        captureStatusItem = captureStatus
+        menu.addItem(captureStatus)
         menu.addItem(.separator())
         add(menu, "Show / hide overlay (global shortcut)", #selector(toggleVisibility))
         add(menu, "Preferences…", #selector(openPreferences))
@@ -446,7 +500,31 @@ final class AppController: NSObject, NSApplicationDelegate {
     @objc private func bottomLeft() { positionPanel(corner: "bottomLeft") }
     @objc private func bottomRight() { positionPanel(corner: "bottomRight") }
     @objc private func openOBS() { if let url = URL(string: obsURL) { NSWorkspace.shared.open(url) } }
-    @objc private func retryCapture() { _ = capture.start() }
+    private func updateKeyboardStatus() {
+        let message: String
+        if !capture.hasPermission {
+            message = "Keyboard: Input Monitoring permission needed"
+        } else if capture.isListening {
+            message = "Keyboard: active"
+        } else {
+            message = "Keyboard: permission granted; listener unavailable"
+        }
+        captureStatusItem?.title = message
+    }
+    @objc private func retryCapture() {
+        let success = capture.start()
+        updateKeyboardStatus()
+        if !success {
+            let alert = NSAlert()
+            alert.messageText = "InputDeck cannot read keyboard input"
+            alert.informativeText = capture.hasPermission
+              ? "The keyboard listener failed to start. Try fully quitting InputDeck, then launching it again. Check for duplicate app instances."
+              : "Allow InputDeck in System Settings → Privacy & Security → Input Monitoring, then quit and relaunch the app. If this is a newly rebuilt app, remove any stale InputDeck permission entry and add the current app."
+            alert.addButton(withTitle: "Open Input Monitoring")
+            alert.addButton(withTitle: "Close")
+            if alert.runModal() == .alertFirstButtonReturn { openSettings() }
+        }
+    }
     @objc private func openSettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
             NSWorkspace.shared.open(url)
