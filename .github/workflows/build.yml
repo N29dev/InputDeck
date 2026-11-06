@@ -1,21 +1,106 @@
 name: macOS Build
+
 on:
   push:
+    branches:
+      - main
   pull_request:
   workflow_dispatch:
+
 permissions:
   contents: read
+
+# Keep continuous releases ordered so older pushes cannot overwrite newer builds.
+concurrency:
+  group: inputdeck-continuous-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
-    runs-on: macos-15
+    name: Build ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: AppleSilicon
+            runner: macos-15
+          - arch: Intel
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Build with Apple toolchain
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Build app
         run: bash build.sh
-      - name: Package app
-        run: ditto -c -k --keepParent build/InputDeck.app InputDeck-macOS.zip
+      - name: Verify built app and signature
+        run: |
+          test -x build/InputDeck.app/Contents/MacOS/InputDeck
+          codesign --verify --deep --strict build/InputDeck.app
+          file build/InputDeck.app/Contents/MacOS/InputDeck
+      - name: Package downloadable app
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent build/InputDeck.app "InputDeck-macOS-${{ matrix.arch }}.zip"
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: InputDeck-macOS-beta
-          path: InputDeck-macOS.zip
+          name: InputDeck-macOS-${{ matrix.arch }}
+          path: InputDeck-macOS-${{ matrix.arch }}.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  continuous:
+    name: Update continuous prerelease
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out commit to tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Collect both app ZIPs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: InputDeck-macOS-*
+          path: dist
+          merge-multiple: true
+      - name: Publish updated prerelease assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test -s dist/InputDeck-macOS-AppleSilicon.zip
+          test -s dist/InputDeck-macOS-Intel.zip
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          cat > release-notes.md <<EOF
+          ## InputDeck Continuous Preview
+
+          Automatically built from the latest successful main-branch commit: \`${GITHUB_SHA}\`.
+
+          Download the ZIP for your Mac, extract InputDeck.app, and drag it to Applications. No Xcode required.
+
+          - **Apple Silicon** (M1/M2/M3/M4/M5): InputDeck-macOS-AppleSilicon.zip
+          - **Intel Mac**: InputDeck-macOS-Intel.zip
+
+          This is a **rolling beta**: its assets and \`continuous\` tag change after successful builds. For reproducible downloads use a numbered release instead.
+
+          **Security:** The app is ad-hoc signed but not Apple-notarized. It needs Input Monitoring permission to highlight keys. It reads trackpad contacts on supported Macs through an undocumented Apple API.
+
+          [Source repository](https://github.com/${GITHUB_REPOSITORY}) · [All versioned releases](https://github.com/${GITHUB_REPOSITORY}/releases)
+          EOF
+          if gh release view continuous --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload continuous dist/*.zip --repo "$GITHUB_REPOSITORY" --clobber
+            gh release edit continuous --repo "$GITHUB_REPOSITORY" \
+              --title "InputDeck Continuous Preview (${SHORT_SHA})" \
+              --notes-file release-notes.md --prerelease
+            # Only the mutable continuous tag moves; numbered tags are untouched.
+            git tag -f continuous "$GITHUB_SHA"
+            git push --force origin refs/tags/continuous
+          else
+            gh release create continuous dist/*.zip --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "InputDeck Continuous Preview (${SHORT_SHA})" \
+              --notes-file release-notes.md --prerelease
+          fi
