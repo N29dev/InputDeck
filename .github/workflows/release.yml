@@ -1,0 +1,68 @@
+name: macOS Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: AppleSilicon
+            runner: macos-15
+          - arch: Intel
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Build InputDeck
+        run: bash build.sh
+      - name: Validate app
+        run: |
+          test -x build/InputDeck.app/Contents/MacOS/InputDeck
+          codesign --verify --deep --strict build/InputDeck.app
+          file build/InputDeck.app/Contents/MacOS/InputDeck
+      - name: Package app ZIP
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent build/InputDeck.app "InputDeck-macOS-${{ matrix.arch }}.zip"
+      - name: Upload downloadable build
+        uses: actions/upload-artifact@v4
+        with:
+          name: InputDeck-macOS-${{ matrix.arch }}
+          path: InputDeck-macOS-${{ matrix.arch }}.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download both app ZIPs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: InputDeck-macOS-*
+          path: dist
+          merge-multiple: true
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -lh dist/*.zip
+          gh release create "$GITHUB_REF_NAME" dist/*.zip \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "InputDeck $GITHUB_REF_NAME" \
+            --generate-notes \
+            --prerelease
