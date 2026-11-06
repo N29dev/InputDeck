@@ -106,6 +106,7 @@ final class KeyCapture {
     private(set) var pressed = Set<String>()
     var onChange: ((Set<String>) -> Void)?
     var onHotkey: (() -> Void)?
+    var onClick: (() -> Void)?
     private var selected = Set(KeyCatalog.defaultKeys)
     private var hotkeyCode: Int64 = 40
     private var hotkeyFlags: CGEventFlags = [.maskAlternate, .maskShift]
@@ -150,6 +151,8 @@ final class KeyCapture {
         let mask = (CGEventMask(1) << CGEventType.keyDown.rawValue)
                  | (CGEventMask(1) << CGEventType.keyUp.rawValue)
                  | (CGEventMask(1) << CGEventType.flagsChanged.rawValue)
+                 | (CGEventMask(1) << CGEventType.leftMouseDown.rawValue)
+                 | (CGEventMask(1) << CGEventType.rightMouseDown.rawValue)
         guard let created = CGEvent.tapCreate(tap: .cgSessionEventTap,
                                              place: .headInsertEventTap,
                                              options: .listenOnly,
@@ -193,6 +196,10 @@ final class KeyCapture {
             if let tap = tap { CGEvent.tapEnable(tap: tap, enable: true) }
             return
         }
+        if kind == .leftMouseDown || kind == .rightMouseDown {
+            onClick?()
+            return
+        }
         let code = event.getIntegerValueField(.keyboardEventKeycode)
         if kind == .keyDown && code == hotkeyCode &&
            event.getIntegerValueField(.keyboardEventAutorepeat) == 0 &&
@@ -221,6 +228,17 @@ final class KeyCapture {
 }
 
 final class OverlayView: NSView {
+    private struct Ripple {
+        let point: CGPoint // Normalized trackpad coordinates, not screen coordinates.
+        let began: TimeInterval
+        let lifetime: TimeInterval
+        let radius: CGFloat
+        let strength: CGFloat
+    }
+
+    private var ripples: [Ripple] = []
+    private var lastContacts: [Int32: CGPoint] = [:]
+    private var lastTrailPoints: [Int32: CGPoint] = [:]
     var selected = KeyCatalog.defaultKeys { didSet { needsDisplay = true } }
     var pressed = Set<String>() { didSet { needsDisplay = true } }
     var fingers = [IDFinger]() { didSet { needsDisplay = true } }
@@ -229,6 +247,62 @@ final class OverlayView: NSView {
     var opacity: CGFloat = 0.88 { didSet { needsDisplay = true } }
     override var isFlipped: Bool { true }
     override var mouseDownCanMoveWindow: Bool { true }
+
+    private func addRipple(at point: CGPoint, now: TimeInterval, click: Bool = false, trail: Bool = false) {
+        ripples.append(Ripple(point: point, began: now,
+                              lifetime: click ? 0.66 : (trail ? 0.43 : 0.60),
+                              radius: click ? 29 : (trail ? 13 : 23),
+                              strength: click ? 0.95 : (trail ? 0.38 : 0.78)))
+        // Bound memory and drawing cost even during fast multi-finger motion.
+        if ripples.count > 96 { ripples.removeFirst(ripples.count - 96) }
+        needsDisplay = true
+    }
+
+    func updateContacts(_ next: [IDFinger], now: TimeInterval) {
+        var current: [Int32: CGPoint] = [:]
+        for finger in next {
+            let id = Int32(finger.identifier)
+            let point = CGPoint(x: CGFloat(finger.x), y: CGFloat(finger.y))
+            current[id] = point
+            if lastContacts[id] == nil {
+                addRipple(at: point, now: now)
+                lastTrailPoints[id] = point
+            } else if let previous = lastTrailPoints[id] {
+                let dx = point.x - previous.x
+                let dy = point.y - previous.y
+                let distance = hypot(dx, dy)
+                if distance >= 0.055 {
+                    // Leave faint pulses along the path, including where a finger was.
+                    let steps = min(7, max(1, Int(ceil(distance / 0.07))))
+                    for step in 1...steps {
+                        let fraction = CGFloat(step) / CGFloat(steps)
+                        addRipple(at: CGPoint(x: previous.x + dx * fraction,
+                                             y: previous.y + dy * fraction),
+                                  now: now, trail: true)
+                    }
+                    lastTrailPoints[id] = point
+                }
+            } else {
+                lastTrailPoints[id] = point
+            }
+        }
+        lastContacts = current
+        lastTrailPoints = lastTrailPoints.filter { current[$0.key] != nil }
+        fingers = next
+    }
+
+    func pulseForClick(now: TimeInterval) {
+        guard trackpadAvailable else { return }
+        for finger in fingers {
+            addRipple(at: CGPoint(x: CGFloat(finger.x), y: CGFloat(finger.y)), now: now, click: true)
+        }
+    }
+
+    func animateRipples(now: TimeInterval) {
+        guard !ripples.isEmpty else { return }
+        ripples.removeAll { now - $0.began >= $0.lifetime }
+        needsDisplay = true
+    }
 
     // The spacebar is displayed as a full-width row beneath the regular keys.
     // This keeps custom layouts compact while matching the physical key shape.
@@ -302,6 +376,23 @@ final class OverlayView: NSView {
             label("Trackpad unavailable", frame: pad, size: 11,
                   color: NSColor.white.withAlphaComponent(0.55))
         } else {
+            NSGraphicsContext.saveGraphicsState()
+            NSBezierPath(roundedRect: pad, xRadius: 10, yRadius: 10).addClip()
+            let now = ProcessInfo.processInfo.systemUptime
+            for ripple in ripples {
+                let t = CGFloat(min(1, max(0, (now - ripple.began) / ripple.lifetime)))
+                let progress = 1 - pow(1 - t, 2)
+                let radius = ripple.radius * (0.25 + 0.75 * progress)
+                let opacity = ripple.strength * pow(1 - t, 1.55)
+                let center = CGPoint(x: pad.minX + ripple.point.x * pad.width,
+                                     y: pad.minY + (1 - ripple.point.y) * pad.height)
+                let ring = NSBezierPath(ovalIn: NSRect(x: center.x - radius,
+                                                       y: center.y - radius,
+                                                       width: radius * 2, height: radius * 2))
+                ring.lineWidth = 1.7
+                NSColor(srgbRed: 0.45, green: 0.75, blue: 1, alpha: opacity).setStroke()
+                ring.stroke()
+            }
             for finger in fingers {
                 let point = CGPoint(x: pad.minX + CGFloat(finger.x) * pad.width,
                                     y: pad.minY + (1 - CGFloat(finger.y)) * pad.height)
@@ -312,6 +403,7 @@ final class OverlayView: NSView {
                 NSBezierPath(ovalIn: NSRect(x: point.x - 5.5, y: point.y - 5.5,
                                             width: 11, height: 11)).fill()
             }
+            NSGraphicsContext.restoreGraphicsState()
         }
     }
 }
@@ -332,6 +424,7 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var trackpadCheckbox: NSButton!
     private var opacitySlider: NSSlider!
     private var obsAvailable = false
+    private var clickSerial = 0
     private var lastSent = ""
     private let obsURL = "http://127.0.0.1:8787/"
 
@@ -370,6 +463,12 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.publish()
         }
         capture.onHotkey = { [weak self] in self?.toggleVisibility() }
+        capture.onClick = { [weak self] in
+            guard let self = self else { return }
+            self.view.pulseForClick(now: ProcessInfo.processInfo.systemUptime)
+            self.clickSerial &+= 1
+            self.publish()
+        }
         capture.configure(preferences)
         _ = capture.start()
         setupMenu()
@@ -382,6 +481,8 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func refresh() {
+        let now = ProcessInfo.processInfo.systemUptime
+        view.animateRipples(now: now)
         capture.synchronizeKeyState()
         // Retry quietly when the user grants Input Monitoring after launch.
         if Date().timeIntervalSince(lastRetryAt) >= 2 {
@@ -391,29 +492,31 @@ final class AppController: NSObject, NSApplicationDelegate, NSWindowDelegate {
             updateKeyboardStatus()
         }
         guard view.trackpadAvailable else { return }
-        var buffer = [IDFinger](repeating: IDFinger(x: 0, y: 0, size: 0), count: 16)
+        var buffer = [IDFinger](repeating: IDFinger(x: 0, y: 0, size: 0, identifier: 0), count: 16)
         let count = buffer.withUnsafeMutableBufferPointer { points in
             Int(id_trackpad_copy(points.baseAddress, Int32(points.count)))
         }
         let next = Array(buffer.prefix(count))
         // Do not invalidate the overlay when nothing changed.
         if next.count != view.fingers.count || zip(next, view.fingers).contains(where: {
-            $0.0.x != $0.1.x || $0.0.y != $0.1.y
+            $0.0.x != $0.1.x || $0.0.y != $0.1.y || $0.0.identifier != $0.1.identifier
         }) {
-            view.fingers = next
+            view.updateContacts(next, now: now)
             publish()
         }
     }
 
     private func publish() {
         guard obsAvailable else { return }
-        let fingers: [[String: Double]] = view.fingers.map { finger in
-            ["x": (Double(finger.x) * 1000).rounded() / 1000,
+        let fingers: [[String: Any]] = view.fingers.map { finger in
+            ["id": Int(finger.identifier),
+             "x": (Double(finger.x) * 1000).rounded() / 1000,
              "y": (Double(finger.y) * 1000).rounded() / 1000]
         }
         let state: [String: Any] = [
             "keys": capture.pressed.sorted(), "selected": preferences.tracked,
-            "fingers": fingers, "trackpad": view.trackpadAvailable,
+            "fingers": fingers, "clickSerial": clickSerial,
+            "trackpad": view.trackpadAvailable,
             "trackpadVisible": preferences.trackpadVisible,
             "opacity": Double(preferences.opacity)
         ]
