@@ -5,6 +5,7 @@ typedef struct {
     float x;
     float y;
     float size;
+    int identifier; // Stable ID for each touch until that finger is lifted.
 } IDFinger;
 
 // Uses Apple's private MultitouchSupport framework, if available.
