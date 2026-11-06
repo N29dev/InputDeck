@@ -42,12 +42,25 @@ html, body { margin:0; background:transparent!important; overflow:hidden }
 .msg { position:absolute; inset:0; display:flex; justify-content:center; align-items:center; text-align:center;
   font-size:11px; color:rgba(255,255,255,.55) }
 .msg[hidden] { display:none }
+.click-markers { position:absolute; z-index:3; pointer-events:none; bottom:8px; left:8px; right:8px;
+  display:flex; justify-content:space-between; gap:8px }
+.click-marker { display:grid; place-items:center; width:68px; height:20px; border-radius:6px;
+  background:rgba(0,0,0,.29); border:1px solid rgba(255,255,255,.14);
+  color:rgba(255,255,255,.58); font-size:9px; font-weight:700; letter-spacing:.025em }
+.click-marker.pressed { color:#fff; background:rgba(61,122,237,.94);
+  border-color:rgba(192,221,255,.72) }
+.click-marker.flash { animation:inputdeck-click-flash .35s ease-out }
+@keyframes inputdeck-click-flash {
+  0% { box-shadow:0 0 0 0 rgba(132,202,255,.75); }
+  65% { box-shadow:0 0 0 7px rgba(132,202,255,.12); }
+  100% { box-shadow:0 0 0 9px transparent; }
+}
 </style>
 </head>
 <body>
 <div class="panel" id="panel">
   <section class="block"><div class="title">INPUTDECK</div><div class="keyboard" id="keyboard"></div></section>
-  <section class="block" id="trackpadBlock"><div class="title">TRACKPAD</div><div class="trackpad" id="trackpad"><div class="ripple-layer" id="ripples"></div><div class="fingers-layer" id="fingers"></div><div class="msg" id="padStatus" hidden>Trackpad unavailable</div></div></section>
+  <section class="block" id="trackpadBlock"><div class="title">TRACKPAD</div><div class="trackpad" id="trackpad"><div class="ripple-layer" id="ripples"></div><div class="fingers-layer" id="fingers"></div><div class="msg" id="padStatus" hidden>Trackpad unavailable</div><div class="click-markers"><span class="click-marker" id="leftClick">L CLICK</span><span class="click-marker" id="rightClick">R CLICK</span></div></div></section>
 </div>
 <script>
 (() => {
@@ -59,6 +72,10 @@ html, body { margin:0; background:transparent!important; overflow:hidden }
   const ripples = document.getElementById('ripples');
   const fingerLayer = document.getElementById('fingers');
   const padStatus = document.getElementById('padStatus');
+  const leftClickIndicator = document.getElementById('leftClick');
+  const rightClickIndicator = document.getElementById('rightClick');
+  let lastTouchPoint = null;
+  let lastTouchAt = 0;
 
   const previousContacts = new Map();
   const trailOrigins = new Map();
@@ -89,6 +106,8 @@ html, body { margin:0; background:transparent!important; overflow:hidden }
     contacts.forEach((finger, index) => {
       const id = String(finger.id ?? index); // Tolerates older local app builds.
       const point = {x: clamp01(finger.x), y: clamp01(finger.y)};
+      lastTouchPoint = point;
+      lastTouchAt = performance.now();
       next.set(id, point);
       const before = previousContacts.get(id);
       if (!before) {
@@ -116,8 +135,21 @@ html, body { margin:0; background:transparent!important; overflow:hidden }
 
     const serial = Number(state.clickSerial ?? 0);
     if (lastClickSerial !== null && serial !== lastClickSerial) {
-      for (const point of next.values()) rippleAt(point, 'click');
+      const pressedSide = state.clickSide === 'right' ? 'right' : 'left';
+      const indicator = pressedSide === 'right' ? rightClickIndicator : leftClickIndicator;
+      indicator.classList.remove('flash');
+      void indicator.offsetWidth; // Restart CSS animation on repeated clicks.
+      indicator.classList.add('flash');
+      const positions = [...next.values()];
+      if (available && positions.length) {
+        for (const point of positions) rippleAt(point, 'click');
+      } else if (available && lastTouchPoint && performance.now() - lastTouchAt < 250) {
+        // Use a very recent contact, not an invented physical click position.
+        rippleAt(lastTouchPoint, 'click');
+      }
     }
+    leftClickIndicator.classList.toggle('pressed', state.leftClick === true);
+    rightClickIndicator.classList.toggle('pressed', state.rightClick === true);
     lastClickSerial = serial;
     previousContacts.clear();
     for (const [id, point] of next) previousContacts.set(id, point);
@@ -155,7 +187,10 @@ html, body { margin:0; background:transparent!important; overflow:hidden }
     renderTouches(state);
   }
 
-  render({selected:defaults,keys:[],fingers:[],clickSerial:0,trackpad:true,trackpadVisible:true,opacity:.88});
+  leftClickIndicator.addEventListener('animationend', () => leftClickIndicator.classList.remove('flash'));
+  rightClickIndicator.addEventListener('animationend', () => rightClickIndicator.classList.remove('flash'));
+  render({selected:defaults,keys:[],fingers:[],clickSerial:0,
+          leftClick:false,rightClick:false,trackpad:true,trackpadVisible:true,opacity:.88});
   const stream = new EventSource('/events');
   stream.onmessage = event => {
     try { connected = true; render(JSON.parse(event.data)); } catch (error) { console.warn('InputDeck invalid frame',error); }
@@ -168,7 +203,9 @@ html, body { margin:0; background:transparent!important; overflow:hidden }
       if (!connected) {
         frame++;
         render({selected:defaults,keys:['W','Shift','Space'],trackpad:true,
-          clickSerial:Math.floor(frame / 18),trackpadVisible:true,
+          clickSerial:Math.floor(frame / 18),clickSide:(Math.floor(frame / 18) % 2 === 0 ? 'left' : 'right'),
+          leftClick:frame % 18 < 5,rightClick:frame % 36 >= 18 && frame % 36 < 23,
+          trackpadVisible:true,
           fingers:[{id:1,x:.42+.27*Math.sin(frame/9),y:.48+.17*Math.cos(frame/12)},
                    {id:2,x:.71,y:.65}],opacity:.88});
       }
