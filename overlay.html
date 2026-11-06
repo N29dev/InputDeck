@@ -16,19 +16,38 @@ html, body { margin:0; background:transparent!important; overflow:hidden }
 .key { display:flex; align-items:center; justify-content:center; border-radius:8px; background:rgba(255,255,255,.08);
   border:1px solid rgba(255,255,255,.09); font-size:13px; font-weight:650; color:#fff; transition:background .065s,border-color .065s }
 .key.small { font-size:9px; letter-spacing:.02em }
+.key.space { grid-column:1 / -1; font-size:11px; letter-spacing:.1em }
 .key.active { background:rgba(61,122,237,.90); border-color:rgba(125,181,255,.95); box-shadow:0 0 12px rgba(40,116,247,.22) }
 .trackpad { position:relative; width:213px; flex:1; min-height:150px; border-radius:10px; overflow:hidden;
   background:rgba(26,35,54,.86); border:1px solid rgba(255,255,255,.21) }
+.ripple-layer,.fingers-layer { position:absolute; inset:0; pointer-events:none }
 .finger { position:absolute; transform:translate(-50%,-50%); width:11px; height:11px; border-radius:50%;
   background:#8dc9ff; box-shadow:0 0 0 11px rgba(75,157,255,.18),0 0 16px rgba(91,179,255,.35) }
+.ripple { position:absolute; width:20px; height:20px; border:2px solid rgba(113,190,255,.95);
+  border-radius:50%; pointer-events:none; animation:inputdeck-ripple .60s ease-out forwards }
+.ripple.trail { animation-name:inputdeck-trail; animation-duration:.43s; border-width:1.5px; border-color:rgba(126,200,255,.72) }
+.ripple.click { animation-name:inputdeck-click; animation-duration:.66s; border-color:#b5e1ff; border-width:2px }
+@keyframes inputdeck-ripple {
+  from { transform:translate(-50%,-50%) scale(.35);opacity:.84 }
+  to { transform:translate(-50%,-50%) scale(2.3);opacity:0 }
+}
+@keyframes inputdeck-trail {
+  from { transform:translate(-50%,-50%) scale(.35);opacity:.39 }
+  to { transform:translate(-50%,-50%) scale(1.3);opacity:0 }
+}
+@keyframes inputdeck-click {
+  from { transform:translate(-50%,-50%) scale(.35);opacity:1 }
+  to { transform:translate(-50%,-50%) scale(2.9);opacity:0 }
+}
 .msg { position:absolute; inset:0; display:flex; justify-content:center; align-items:center; text-align:center;
   font-size:11px; color:rgba(255,255,255,.55) }
+.msg[hidden] { display:none }
 </style>
 </head>
 <body>
 <div class="panel" id="panel">
   <section class="block"><div class="title">INPUTDECK</div><div class="keyboard" id="keyboard"></div></section>
-  <section class="block" id="trackpadBlock"><div class="title">TRACKPAD</div><div class="trackpad" id="trackpad"></div></section>
+  <section class="block" id="trackpadBlock"><div class="title">TRACKPAD</div><div class="trackpad" id="trackpad"><div class="ripple-layer" id="ripples"></div><div class="fingers-layer" id="fingers"></div><div class="msg" id="padStatus" hidden>Trackpad unavailable</div></div></section>
 </div>
 <script>
 (() => {
@@ -36,10 +55,74 @@ html, body { margin:0; background:transparent!important; overflow:hidden }
   const defaults = ['Q','W','E','R','A','S','D','F','Shift','Ctrl','C','V','Space'];
   const panel = document.getElementById('panel');
   const keyboard = document.getElementById('keyboard');
-  const pad = document.getElementById('trackpad');
   const padBlock = document.getElementById('trackpadBlock');
+  const ripples = document.getElementById('ripples');
+  const fingerLayer = document.getElementById('fingers');
+  const padStatus = document.getElementById('padStatus');
+
+  const previousContacts = new Map();
+  const trailOrigins = new Map();
   let lastSelected = '';
+  let lastClickSerial = null;
   let connected = false;
+
+  const clamp01 = value => Math.max(0,Math.min(1,Number(value) || 0));
+
+  function rippleAt(point, kind = 'touch') {
+    const node = document.createElement('i');
+    node.className = 'ripple' + (kind === 'touch' ? '' : ' ' + kind);
+    node.style.left = (point.x * 100) + '%';
+    node.style.top = ((1 - point.y) * 100) + '%';
+    ripples.appendChild(node);
+    node.addEventListener('animationend', () => node.remove(), {once:true});
+    // Prevent extreme multi-touch movement from accumulating unbounded DOM nodes.
+    while (ripples.childElementCount > 96) ripples.firstElementChild.remove();
+  }
+
+  function renderTouches(state) {
+    const available = state.trackpad === true;
+    padStatus.hidden = available;
+    const next = new Map();
+    const contacts = available && Array.isArray(state.fingers) ? state.fingers : [];
+    fingerLayer.replaceChildren();
+
+    contacts.forEach((finger, index) => {
+      const id = String(finger.id ?? index); // Tolerates older local app builds.
+      const point = {x: clamp01(finger.x), y: clamp01(finger.y)};
+      next.set(id, point);
+      const before = previousContacts.get(id);
+      if (!before) {
+        rippleAt(point, 'touch');
+        trailOrigins.set(id, point);
+      } else {
+        const anchor = trailOrigins.get(id) || before;
+        const distance = Math.hypot(point.x - anchor.x, point.y - anchor.y);
+        if (distance >= 0.055) {
+          const steps = Math.min(7, Math.max(1, Math.ceil(distance / 0.07)));
+          for (let step = 1; step <= steps; step++) {
+            const k = step / steps;
+            rippleAt({x: anchor.x + (point.x - anchor.x) * k,
+                      y: anchor.y + (point.y - anchor.y) * k}, 'trail');
+          }
+          trailOrigins.set(id, point);
+        }
+      }
+      const dot = document.createElement('i');
+      dot.className = 'finger';
+      dot.style.left = (point.x * 100) + '%';
+      dot.style.top = ((1 - point.y) * 100) + '%';
+      fingerLayer.appendChild(dot);
+    });
+
+    const serial = Number(state.clickSerial ?? 0);
+    if (lastClickSerial !== null && serial !== lastClickSerial) {
+      for (const point of next.values()) rippleAt(point, 'click');
+    }
+    lastClickSerial = serial;
+    previousContacts.clear();
+    for (const [id, point] of next) previousContacts.set(id, point);
+    for (const id of trailOrigins.keys()) if (!next.has(id)) trailOrigins.delete(id);
+  }
 
   function render(state) {
     const selected = Array.isArray(state.selected) ? state.selected : defaults;
@@ -47,49 +130,48 @@ html, body { margin:0; background:transparent!important; overflow:hidden }
     const signature = JSON.stringify(selected);
     if (signature !== lastSelected) {
       keyboard.replaceChildren();
-      for (const key of selected) {
+      const arranged = [...selected.filter(key => key !== 'Space')];
+      if (selected.includes('Space')) arranged.push('Space');
+      for (const key of arranged) {
         const node = document.createElement('div');
-        node.className = 'key' + (key.length > 3 ? ' small' : '');
+        node.className = 'key' + (key.length > 3 ? ' small' : '') + (key === 'Space' ? ' space' : '');
         node.dataset.key = key;
         node.textContent = key.toUpperCase();
         keyboard.appendChild(node);
       }
       lastSelected = signature;
     }
-    const height = Math.max(224, 52 + Math.ceil(Math.max(1,selected.length)/4)*43);
-    panel.style.height = (height-4)+'px';
+
+    const ordinary = selected.filter(key => key !== 'Space').length;
+    const rows = Math.ceil(ordinary / 4) + (selected.includes('Space') ? 1 : 0);
+    const height = Math.max(224,52 + Math.max(rows,1) * 43);
+    panel.style.height = (height - 4) + 'px';
     panel.style.width = visible ? '499px' : '262px';
-    panel.style.setProperty('--panel-opacity', String(Math.min(1,Math.max(.4,Number(state.opacity)||.88))));
+    panel.style.setProperty('--panel-opacity',String(Math.min(1,Math.max(.4,Number(state.opacity) || .88))));
     padBlock.style.display = visible ? 'flex' : 'none';
+
     const active = new Set(state.keys || []);
-    for (const element of keyboard.children) element.classList.toggle('active',active.has(element.dataset.key));
-    pad.replaceChildren();
-    if (!state.trackpad) {
-      const msg = document.createElement('div');
-      msg.className = 'msg';
-      msg.textContent = 'Trackpad unavailable';
-      pad.appendChild(msg);
-    } else {
-      for (const finger of state.fingers || []) {
-        const node = document.createElement('div');
-        node.className = 'finger';
-        node.style.left = Math.max(0,Math.min(100,Number(finger.x)*100))+'%';
-        node.style.top = Math.max(0,Math.min(100,(1-Number(finger.y))*100))+'%';
-        pad.appendChild(node);
-      }
-    }
+    for (const key of keyboard.children) key.classList.toggle('active',active.has(key.dataset.key));
+    renderTouches(state);
   }
-  render({selected:defaults, keys:[], fingers:[], trackpad:true, trackpadVisible:true, opacity:.88});
+
+  render({selected:defaults,keys:[],fingers:[],clickSerial:0,trackpad:true,trackpadVisible:true,opacity:.88});
   const stream = new EventSource('/events');
   stream.onmessage = event => {
-    try { connected = true; render(JSON.parse(event.data)); } catch (_) { /* malformed frame */ }
+    try { connected = true; render(JSON.parse(event.data)); } catch (error) { console.warn('InputDeck invalid frame',error); }
   };
-  stream.onerror = () => { connected = false; /* EventSource reconnects */ };
-  // Demo preview: http://127.0.0.1:8787/?demo=1
+  stream.onerror = () => { connected = false; /* EventSource reconnects automatically. */ };
+
   if (new URLSearchParams(location.search).has('demo')) {
+    let frame = 0;
     setInterval(() => {
-      if (!connected) render({selected:defaults, keys:['W','Shift','Space'], trackpad:true,
-         trackpadVisible:true, fingers:[{x:.25+.2*Math.sin(Date.now()/1300),y:.5},{x:.65,y:.65}]});
+      if (!connected) {
+        frame++;
+        render({selected:defaults,keys:['W','Shift','Space'],trackpad:true,
+          clickSerial:Math.floor(frame / 18),trackpadVisible:true,
+          fingers:[{id:1,x:.42+.27*Math.sin(frame/9),y:.48+.17*Math.cos(frame/12)},
+                   {id:2,x:.71,y:.65}],opacity:.88});
+      }
     },80);
   }
 })();
