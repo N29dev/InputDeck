@@ -2,7 +2,7 @@
 
 **InputDeck** is a lightweight, open-source keystroke and live trackpad-contact overlay for macOS. Use it directly on your desktop or as a transparent OBS Browser Source. Built with Swift/AppKit and a small C bridge; no online accounts, dependencies, or cloud servers.
 
-> **Status: v0.2.0 beta.** The source was syntax-checked on Linux, but the native macOS build and private trackpad API have **not** been verified by a macOS CI run yet. Feedback and bug reports are welcome.
+> **Status: v0.2.1 beta.** Apple Silicon CI builds have passed; Intel binaries and live trackpad behavior still need testing on additional Macs. Feedback and bug reports are welcome.
 
 ## Features
 
@@ -13,6 +13,31 @@
 - **Saved settings and position** between launches.
 - **OBS integration** via a local, transparent Browser Source on `127.0.0.1:8787`.
 - Works offline and does not record or upload keyboard input.
+
+## Download prebuilt app (no development tools needed)
+
+Visit **[GitHub Releases](https://github.com/N29dev/InputDeck/releases/latest)** and expand **Assets** to download:
+
+- `InputDeck-macOS-AppleSilicon.zip` — M1/M2/M3/M4/M5 Macs.
+- `InputDeck-macOS-Intel.zip` — Intel Macs.
+
+Unzip the file, drag `InputDeck.app` into **Applications**, and open it. Grant **Input Monitoring** in **System Settings → Privacy & Security** when prompted, then restart InputDeck if the keys don't light up.
+
+**Important:** This beta is **ad-hoc signed, not Apple Developer ID signed or notarized**. Depending on your security settings, macOS may refuse the first launch. If you trust the code from this repository, open the app from Finder using Control-click → **Open**, or use the **Open Anyway** option under **System Settings → Privacy & Security** after a blocked launch. Do not disable Gatekeeper globally.
+
+Releases are generated automatically when the maintainer pushes a version tag such as `v0.2.1-beta.1`; after both Apple Silicon and Intel builds pass, the downloadable ZIPs are attached to the release. Until the first tag is published, the Releases page will be empty. For temporary test downloads, open the latest successful run of **macOS Release** under **Actions** and download its artifacts (GitHub sign-in may be required).
+
+### Maintainer: publish a beta
+
+After committing changes to `main`, tag the version you want to release:
+
+```bash
+git pull --ff-only
+git tag v0.2.1-beta.1
+git push origin v0.2.1-beta.1
+```
+
+The tag triggers [the release workflow](.github/workflows/release.yml). Confirm both build jobs pass in GitHub Actions before sharing the Releases link. Do not create a GitHub release manually for the same tag while the workflow is publishing it.
 
 ## Install from source
 
@@ -71,7 +96,8 @@ Open `http://127.0.0.1:8787/?demo=1` in a browser for a demo animation **when th
 - `overlay.html`: OBS transparent page.
 - `Info.plist`: macOS bundle metadata.
 - `build.sh` / `Launch-InputDeck.command`: builds a local `.app` with native Apple tooling.
-- `.github/workflows/build.yml`: macOS GitHub Actions compile check and downloadable build artifact.
+- `.github/workflows/build.yml`: macOS GitHub Actions compile check and temporary downloadable build artifact.
+- `.github/workflows/release.yml`: prebuilt Apple Silicon / Intel `.app` ZIPs and automatic tagged GitHub Releases.
 
 ## Publishing to GitHub
 
