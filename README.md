@@ -53,6 +53,16 @@ If you downloaded the ZIP and macOS prevents the script from running, open Termi
 
 **Permissions:** InputDeck needs **System Settings → Privacy & Security → Input Monitoring** to observe key states and its global shortcut. If it doesn't work after granting permission, restart the app, and use **Retry keyboard permission** in the menu bar. Some systems may request Accessibility permission as well. macOS may restrict overlays in certain fullscreen or secure-input contexts.
 
+## Keyboard not highlighting? (Troubleshooting)
+
+1. **Quit InputDeck fully** from its menu bar menu (don't just close the overlay).
+2. Open **System Settings → Privacy & Security → Input Monitoring** and enable the current `InputDeck.app`. If you have rebuilt or moved the app, remove stale duplicates and use **+** to select the current app.
+3. Relaunch InputDeck, open its menu bar menu, and check **Keyboard: active**. If it says **permission needed**, allow Input Monitoring. If it says **listener unavailable**, select **Retry keyboard permission**, then restart the app.
+4. Hold **W** or **Space** for one second in TextEdit or Finder to verify the highlight, then check Roblox. Test the native overlay first; OBS uses the same input state.
+5. If the native overlay works but OBS doesn't, ensure there is only one InputDeck instance (only one can bind to port 8787), and refresh the OBS Browser Source.
+
+The overlay uses both passive event notifications and a 60fps current-key-state check for *only your selected keys*. It does not record or persist a history of typed keys. macOS may block monitoring during secure input and in some fullscreen/game environments.
+
 ## Preferences
 
 Click the **keyboard icon** in the macOS menu bar → **Preferences…**.
