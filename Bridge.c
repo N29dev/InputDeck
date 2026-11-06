@@ -66,7 +66,8 @@ static int mt_callback(int device, MTTouch *touches, int n, double timestamp, in
             if (touches[i].state <= 0) continue;
             next[count++] = (IDFinger){.x = fminf(1, fmaxf(0, x)),
                                        .y = fminf(1, fmaxf(0, y)),
-                                       .size = touches[i].size};
+                                       .size = touches[i].size,
+                                       .identifier = touches[i].identifier};
         }
     }
     pthread_mutex_lock(&mt_lock);
